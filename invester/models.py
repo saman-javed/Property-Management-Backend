@@ -1,13 +1,16 @@
-from django.db import models
-
-# Create your models here.
 from decimal import Decimal
 from django.db import models, transaction
 from django.core.exceptions import ValidationError
-from django.utils import timezone
-
-# Import your Project model (adjust path if needed)
+from django.core.validators import RegexValidator
 from towns_projects.models import Project
+
+
+# CNIC format validator: 12345-1234567-1
+cnic_validator = RegexValidator(
+    regex=r'^\d{5}-\d{7}-\d{1}$',
+    message="CNIC must be in the format 12345-1234567-1"
+)
+
 
 class Investor(models.Model):
     name = models.CharField(max_length=200)
@@ -50,13 +53,12 @@ class InvestorProject(models.Model):
 
     def total_project_profit(self):
         """
-        Assumes Project model has a numeric field `net_profit` (Decimal).
-        If not present, returns 0.0 — you should wire project net profit from accounting.
+        Use Project.dynamic_net_profit instead of static net_profit
         """
-        net_profit = getattr(self.project, 'net_profit', None)
-        if net_profit is None:
+        profit = getattr(self.project, 'dynamic_net_profit', None)
+        if profit is None:
             return Decimal('0')
-        return (Decimal(net_profit) * (Decimal(self.profit_percent) / Decimal('100')))
+        return (Decimal(profit) * (Decimal(self.profit_percent) / Decimal('100')))
 
     def total_payouts(self):
         total = self.payouts.aggregate(s=models.Sum('amount'))['s'] or Decimal('0')
@@ -82,7 +84,7 @@ class InvestorPayout(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     def clean(self):
-        # reference required for non-cash modes
+        # Reference required for non-cash modes
         if self.mode and self.mode.lower() != 'cash' and not self.reference:
             raise ValidationError("Reference is required for non-cash payouts.")
 
@@ -93,16 +95,13 @@ class InvestorPayout(models.Model):
 
     def generate_voucher_no(self):
         # Simple voucher generation: INV-VCHR-<zero-padded count>
-        # NOTE: For heavy concurrent systems, use a DB sequence or separate table to avoid race conditions.
         count = InvestorPayout.objects.count() + 1
         return f"INV-VCHR-{count:06d}"
 
     def save(self, *args, **kwargs):
         self.full_clean()
         if not self.voucher_no:
-            # ensure atomic-ish generation (not perfect race-proof)
             with transaction.atomic():
-                # pick next voucher
                 self.voucher_no = self.generate_voucher_no()
                 super().save(*args, **kwargs)
         else:
@@ -110,3 +109,7 @@ class InvestorPayout(models.Model):
 
     def __str__(self):
         return f"{self.investor_project} - {self.amount}"
+
+
+
+

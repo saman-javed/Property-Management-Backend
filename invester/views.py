@@ -1,6 +1,4 @@
 from django.shortcuts import render
-
-# Create your views here.
 import csv
 from decimal import Decimal
 from django.http import HttpResponse
@@ -17,6 +15,8 @@ from .serializers import (
     InvestorPayoutSerializer
 )
 
+
+# ------------------- Investor ------------------- #
 class InvestorViewSet(viewsets.ModelViewSet):
     queryset = Investor.objects.all().order_by('-created_at')
     serializer_class = InvestorSerializer
@@ -40,20 +40,32 @@ class InvestorViewSet(viewsets.ModelViewSet):
         return response
 
 
+# ------------------- InvestorProject ------------------- #
 class InvestorProjectViewSet(viewsets.ModelViewSet):
     queryset = InvestorProject.objects.all().order_by('-id')
     serializer_class = InvestorProjectSerializer
 
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            with transaction.atomic():
+                instance = serializer.save()
+                return Response(self.get_serializer(instance).data, status=status.HTTP_201_CREATED)
+        except Exception as e:
+            return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
     @action(detail=True, methods=['patch'])
     def quick_edit_profit(self, request, pk=None):
-        """
-        Quick edit endpoint to update profit_percent for an investor-project mapping.
-        """
         ip = self.get_object()
         serializer = InvestorProjectQuickEditSerializer(ip, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
-        serializer.save()
-        return Response(InvestorProjectSerializer(ip).data)
+        try:
+            serializer.save()
+            return Response(InvestorProjectSerializer(ip).data)
+        except Exception as e:
+            return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
     @action(detail=False, methods=['get'])
     def export(self, request):
@@ -62,16 +74,23 @@ class InvestorProjectViewSet(viewsets.ModelViewSet):
         writer = csv.writer(response)
         writer.writerow(['ID', 'Investor', 'Project', 'Investment Amount', 'Profit %', 'Start Date', 'Payable Balance'])
         for ip in self.queryset:
-            writer.writerow([ip.id, ip.investor.name, getattr(ip.project, 'name', ''), ip.investment_amount, ip.profit_percent, ip.start_date, ip.payable_balance()])
+            writer.writerow([
+                ip.id,
+                ip.investor.name,
+                getattr(ip.project, 'name', ''),
+                ip.investment_amount,
+                ip.profit_percent,
+                ip.start_date,
+                ip.payable_balance()
+            ])
         return response
 
     @action(detail=True, methods=['get'])
     def ledger(self, request, pk=None):
-        """
-        Returns ledger for this investor-project: total profit share, payouts list, and balance.
-        """
         ip = self.get_object()
-        payouts_qs = ip.payouts.order_by('payout_date').values('id', 'amount', 'payout_date', 'mode', 'reference', 'voucher_no')
+        payouts_qs = ip.payouts.order_by('payout_date').values(
+            'id', 'amount', 'payout_date', 'mode', 'reference', 'voucher_no'
+        )
         total_profit = ip.total_project_profit()
         paid = ip.total_payouts()
         balance = ip.payable_balance()
@@ -86,46 +105,19 @@ class InvestorProjectViewSet(viewsets.ModelViewSet):
         })
 
 
+# ------------------- InvestorPayout ------------------- #
 class InvestorPayoutViewSet(viewsets.ModelViewSet):
     queryset = InvestorPayout.objects.all().order_by('-payout_date')
     serializer_class = InvestorPayoutSerializer
 
-    def create(self, request, *args, **kwargs):
-        """
-        Override create to:
-         - validate that investor_project exists
-         - check payable balance and do not allow overpayment
-         - auto create voucher_no in model.save()
-        """
-        serializer = self.get_serializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        with transaction.atomic():
-            # perform model-level validation via .full_clean() in save
-            payout = serializer.save()
-            return Response(self.get_serializer(payout).data, status=status.HTTP_201_CREATED)
-
     @action(detail=False, methods=['get'])
-    def export(self, request):
-        response = HttpResponse(content_type='text/csv')
-        response['Content-Disposition'] = 'attachment; filename="investor_payouts.csv"'
-        writer = csv.writer(response)
-        writer.writerow(['ID', 'Investor', 'Project', 'Amount', 'Payout Date', 'Mode', 'Reference', 'Voucher No', 'Created At'])
-        for p in self.queryset:
-            writer.writerow([p.id, p.investor_project.investor.name, getattr(p.investor_project.project, 'name', ''), p.amount, p.payout_date, p.mode, p.reference, p.voucher_no, p.created_at])
-        return response
-
-    @action(detail=True, methods=['get'])
-    def balance(self, request, pk=None):
-        """
-        Given an investor_project pk, return payable balance.
-        (But this action is on payouts; we support receiving investor_project id via query param)
-        """
+    def balance(self, request):
         ip_id = request.query_params.get('investor_project')
-        if ip_id:
-            try:
-                ip = InvestorProject.objects.get(pk=ip_id)
-            except InvestorProject.DoesNotExist:
-                return Response({"detail": "InvestorProject not found."}, status=404)
-            return Response({"payable_balance": ip.payable_balance()})
-        else:
+        if not ip_id:
             return Response({"detail": "Provide ?investor_project=<id> as query param."}, status=400)
+        try:
+            ip = InvestorProject.objects.get(pk=ip_id)
+        except InvestorProject.DoesNotExist:
+            return Response({"detail": "InvestorProject not found."}, status=404)
+        # return numeric value (float) for frontend
+        return Response({"payable_balance": float(ip.payable_balance())})
