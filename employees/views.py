@@ -73,3 +73,6 @@ class SalaryPaymentViewSet(viewsets.ModelViewSet):
                 s.employee.name, s.month, s.amount, s.pay_date, s.mode, s.reference, s.voucher_no
             ])
         return response
+
+
+

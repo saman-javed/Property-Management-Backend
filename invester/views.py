@@ -16,6 +16,7 @@ from .serializers import (
 )
 
 
+
 # ------------------- Investor ------------------- #
 class InvestorViewSet(viewsets.ModelViewSet):
     queryset = Investor.objects.all().order_by('-created_at')
@@ -39,6 +40,13 @@ class InvestorViewSet(viewsets.ModelViewSet):
             writer.writerow([i.id, i.name, i.cnic, i.email, i.contact, i.address, i.start_date, i.created_at])
         return response
 
+    @action(detail=False, methods=['get'])
+    def list_dropdown(self, request):
+        """
+        Returns a simplified list of investors for dropdown
+        """
+        investors = self.queryset.values('id', 'name')
+        return Response(list(investors))
 
 # ------------------- InvestorProject ------------------- #
 class InvestorProjectViewSet(viewsets.ModelViewSet):
@@ -121,3 +129,8 @@ class InvestorPayoutViewSet(viewsets.ModelViewSet):
             return Response({"detail": "InvestorProject not found."}, status=404)
         # return numeric value (float) for frontend
         return Response({"payable_balance": float(ip.payable_balance())})
+    
+
+
+
+
